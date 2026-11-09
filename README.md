@@ -6,7 +6,7 @@ Useful in cases where you have a public DNS record in Hostinger pointing to a lo
 
 ## Setup
 
-The 'renewcert.sh' script requires expect as a dependency:
+The 'renewcert.sh' script requires 'expect' as a dependency:
 ```
 sudo apt update
 sudo apt install expect
