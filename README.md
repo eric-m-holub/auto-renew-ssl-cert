@@ -15,7 +15,7 @@ sudo apt install expect
 
 ## Usage
 
-Replace 'yourdomain.com' with the FQDN you are trying to renew. 
+Replace 'yourdomain.com' within 'renewcert.sh' and 'addtohosts.sh' with the FQDN you are trying to renew. 
 
 Generate a [Hostinger API key](https://docs.hostinger.com/api-reference/overview) and place it in the same directory as the two bash scripts in a file called '.key'
 
