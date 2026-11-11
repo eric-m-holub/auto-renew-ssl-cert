@@ -1,0 +1,126 @@
+#!/usr/bin/expect -f
+#
+# Usage: certrenew.exp -d <domain> [--dry-run]
+#        certrenew.exp --domain=<domain> [--dry-run]
+#
+# Requests a certificate for <domain> AND *.<domain> using certbot's manual
+# DNS challenge, publishing the TXT records through Hostinger (addtxtrecord.sh).
+
+set timeout -1
+set addtxt  "/home/eric/certrenew/addtxtrecord.sh"
+
+proc usage {} {
+    puts stderr "Usage: [file tail $::argv0] -d <domain> \[--dry-run\]"
+    exit 2
+}
+
+# ---------------------------------------------------------------- arguments
+set domain ""
+set dryrun 0
+for {set i 0} {$i < [llength $argv]} {incr i} {
+    set arg [lindex $argv $i]
+    switch -glob -- $arg {
+        -d - --domain {
+            incr i
+            if {$i >= [llength $argv]} { usage }
+            set domain [lindex $argv $i]
+        }
+        --domain=* { set domain [string range $arg 9 end] }
+        --dry-run  { set dryrun 1 }
+        -h - --help { usage }
+        default {
+            puts stderr "Unknown argument: $arg"
+            usage
+        }
+    }
+}
+if {$domain eq ""} { usage }
+
+# Strip a leading "*." or trailing "." in case one was passed in.
+regsub {^\*\.} $domain "" domain
+regsub {\.$}   $domain "" domain
+
+if {[llength [split $domain "."]] < 2} {
+    puts stderr "Domain looks wrong: $domain"
+    exit 2
+}
+
+# Both <domain> and *.<domain> validate at _acme-challenge.<domain>
+# (addtxtrecord.sh works out the Hostinger record name from the domain).
+set fqdn "_acme-challenge.$domain"
+
+# ---------------------------------------------------------------- certbot command
+set cmd [list sudo certbot certonly --manual --preferred-challenges dns \
+             --cert-name $domain -d $domain -d "*.$domain"]
+if {$dryrun} { lappend cmd --dry-run }
+
+puts "==> [join $cmd]"
+puts "==> TXT record: $fqdn"
+
+# Wait until a public resolver returns every value, or give up after ~2 minutes.
+proc wait_for_dns {fqdn values} {
+    if {[catch {exec which dig}]} {
+        puts "\n==> dig not installed; waiting 60s for DNS propagation"
+        sleep 60
+        return
+    }
+    for {set n 0} {$n < 24} {incr n} {
+        catch {exec dig +short TXT $fqdn @1.1.1.1} answer
+        set ok 1
+        foreach v $values {
+            if {[string first $v $answer] < 0} { set ok 0; break }
+        }
+        if {$ok} {
+            puts "\n==> TXT record visible on 1.1.1.1"
+            sleep 5
+            return
+        }
+        sleep 5
+    }
+    puts "\n==> TXT record not visible yet after 2 minutes; continuing anyway"
+}
+
+# ---------------------------------------------------------------- run certbot
+set values {}
+spawn {*}$cmd
+
+expect {
+    -re {with the following value:\s+([A-Za-z0-9_-]{43})\s} {
+        lappend values $expect_out(1,string)
+        exp_continue
+    }
+    "Press Enter to Continue" {
+        if {[llength $values] > 0} {
+            # Publish every value collected so far: the apex and wildcard
+            # challenges share one name and must both exist at the same time.
+            puts "\n==> Publishing [llength $values] TXT value(s)"
+            if {[catch {exec $addtxt -d $domain {*}$values 2>@1} out]} {
+                puts stderr "\n==> addtxtrecord.sh failed:\n$out"
+                send "c\r"
+                exit 1
+            }
+            puts $out
+            wait_for_dns $fqdn $values
+        }
+        send "\r"
+        exp_continue
+    }
+    -re {\(U\)pdate[^\n]*\(C\)ancel} {
+        # Existing cert gaining the wildcard name
+        send "U\r"
+        exp_continue
+    }
+    -re {\(E\)xpand[^\n]*\(C\)ancel} {
+        send "E\r"
+        exp_continue
+    }
+    -re {Select the appropriate number \[1-2\]} {
+        # 1: Keep the existing certificate  2: Renew & replace
+        send "2\r"
+        exp_continue
+    }
+    eof
+}
+
+set result [wait]
+exit [lindex $result 3]
